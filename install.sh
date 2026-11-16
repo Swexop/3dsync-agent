@@ -9,6 +9,11 @@
 #     -- yukaridakinin kisayoli: customers/<ad>/env.sh ve
 #     customers/<ad>/secrets.sh dosyalarini kullanir (COK SAYIDA
 #     musteri/kurulumu ayri dizinlerde tutmak icin -- bkz. customers/README.md).
+#   --dry-run    HICBIR host'a SSH/scp ATMADAN (ve SSH key kurmadan),
+#                sadece NELERIN yapilacagini listeler. Yeni bir musteriye
+#                ilk kurulumdan once, veya env.sh degisikliginden sonra
+#                "bu komut tam olarak neyi degistirecek?" sorusuna cevap
+#                vermek icin -- bkz. Faz 4 (urunlestirme yol haritasi).
 #
 # NOT: env.sh ve secrets.sh BU PAKETTE YOK -- musterinin kendi AutoSync/
 # 3DSync kurulumundan (mevcut, degismeyen dosyalar) geliyor. Bu script
@@ -43,11 +48,13 @@
 set -euo pipefail
 
 SETUP_SSH_KEYS=1
+DRY_RUN=0
 CUSTOMER=""
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-ssh-keys) SETUP_SSH_KEYS=0; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     --customer)
       CUSTOMER="${2:-}"
       if [ -z "$CUSTOMER" ]; then
@@ -82,9 +89,16 @@ else
 fi
 
 if [ -z "$ENV_FILE" ] || [ ! -f "$ENV_FILE" ]; then
-  echo "Kullanim: $0 /path/to/config/env.sh [/path/to/config/secrets.sh] [--no-ssh-keys]" >&2
-  echo "      veya: $0 --customer <ad> [--no-ssh-keys]" >&2
+  echo "Kullanim: $0 /path/to/config/env.sh [/path/to/config/secrets.sh] [--no-ssh-keys] [--dry-run]" >&2
+  echo "      veya: $0 --customer <ad> [--no-ssh-keys] [--dry-run]" >&2
   exit 1
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "==> --dry-run VERILDI: hicbir host'a SSH/scp atilmayacak, hicbir dosya"
+  echo "    degistirilmeyecek/kopyalanmayacak, hicbir SSH anahtari kurulmayacak."
+  echo "    Sadece NELERIN yapilacagi listelenecek."
+  echo
 fi
 
 # shellcheck disable=SC1090
@@ -101,6 +115,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BINARY="$SCRIPT_DIR/3dsync-agent"
 
 # --- 1) Binary'yi derle (go varsa) -------------------------------------
+# NOT (--dry-run): bu adim DRY_RUN'da da GERCEKTEN calisir -- hicbir
+# host'a dokunmuyor (sadece bu dizindeki yerel binary'yi uretiyor/
+# guncelliyor), ve sonraki adimlarin ("nelerin gonderilecegi") dogru
+# bir binary uzerinden raporlanmasini saglar.
 if command -v go >/dev/null 2>&1; then
   echo "==> go build (linux/amd64, stripped)..."
   # Surum numarasini git tag'inden oku (yoksa "dev") -- bkz. build.sh.
@@ -174,6 +192,18 @@ fi
 
 echo "==> Dagitilacak host'lar:$HOSTS"
 
+HAS_SECRETS=0
+if [ -n "$SECRETS_FILE" ] && [ -f "$SECRETS_FILE" ]; then
+  HAS_SECRETS=1
+fi
+
+# INSTALL_TS: bu calistirmaya ait TEK bir zaman damgasi -- asagidaki
+# yedekleme adiminda HER host'ta AYNI klasor adi (.rollback/$INSTALL_TS/)
+# kullanilir, boylece bir sonraki "rollback.sh" cagrisi butun host'lari
+# TUTARLI (ayni ana dagitimdan ONCEKI) bir noktaya geri alabilir --
+# bkz. rollback.sh.
+INSTALL_TS="$(date +%Y%m%d_%H%M%S)"
+
 FAILED=""
 for h in $HOSTS; do
   echo "--- $h ---"
@@ -184,19 +214,48 @@ for h in $HOSTS; do
   # degiskenlerini miras ALMAZ) -- yani her host kendi env.sh/secrets.sh
   # kopyasina sahip olmali. Zaten ayni mainpath'te varsa UZERINE YAZILIR
   # (ayni dosyalar, farkli degil).
-  if ssh -o ConnectTimeout=10 "$user@$h" "mkdir -p '$mainpath/config'" \
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "    [DRY RUN] mkdir -p '$mainpath/.rollback/$INSTALL_TS' + mevcut binary/wrapper/env.sh/secrets.sh'i oraya yedekle (varsa)"
+    echo "    [DRY RUN] mkdir -p '$mainpath/config'"
+    echo "    [DRY RUN] scp $BINARY -> $user@$h:$mainpath/3dsync-agent"
+    echo "    [DRY RUN] scp $WRAPPER -> $user@$h:$mainpath/3dsync-agent-run"
+    echo "    [DRY RUN] scp $ENV_FILE -> $user@$h:$mainpath/config/env.sh"
+    if [ "$HAS_SECRETS" -eq 1 ]; then
+      echo "    [DRY RUN] scp $SECRETS_FILE -> $user@$h:$mainpath/config/secrets.sh"
+    fi
+    echo "    [DRY RUN] chmod +x binary+wrapper, chmod 600 secrets.sh (varsa)"
+    continue
+  fi
+  # Yedekleme (rollback icin): YENI dosyalari UZERINE YAZMADAN ONCE,
+  # bu host'ta HALIHAZIRDA var olan binary/wrapper/env.sh/secrets.sh
+  # (varsa -- ilk kurulumda hicbiri yoktur, o zaman bu adim sessizce
+  # hicbir sey yapmaz) '.rollback/$INSTALL_TS/' altina kopyalanir.
+  # "cp -a" (scp/ssh DEGIL) kullanilir -- zaten AYNI host uzerinde,
+  # ag'a gerek yok.
+  BACKUP_CMD="mkdir -p '$mainpath/.rollback/$INSTALL_TS' \
+    && { [ -f '$mainpath/3dsync-agent' ] && cp -a '$mainpath/3dsync-agent' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
+    && { [ -f '$mainpath/3dsync-agent-run' ] && cp -a '$mainpath/3dsync-agent-run' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
+    && { [ -f '$mainpath/config/env.sh' ] && cp -a '$mainpath/config/env.sh' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
+    && { [ -f '$mainpath/config/secrets.sh' ] && cp -a '$mainpath/config/secrets.sh' '$mainpath/.rollback/$INSTALL_TS/' || true; }"
+  if ssh -o ConnectTimeout=10 "$user@$h" "$BACKUP_CMD" \
+     && ssh "$user@$h" "mkdir -p '$mainpath/config'" \
      && scp -q "$BINARY" "$user@$h:$mainpath/3dsync-agent" \
      && scp -q "$WRAPPER" "$user@$h:$mainpath/3dsync-agent-run" \
      && scp -q "$ENV_FILE" "$user@$h:$mainpath/config/env.sh" \
-     && { [ -z "$SECRETS_FILE" ] || [ ! -f "$SECRETS_FILE" ] || scp -q "$SECRETS_FILE" "$user@$h:$mainpath/config/secrets.sh"; } \
+     && { [ "$HAS_SECRETS" -eq 0 ] || scp -q "$SECRETS_FILE" "$user@$h:$mainpath/config/secrets.sh"; } \
      && ssh "$user@$h" "chmod +x '$mainpath/3dsync-agent' '$mainpath/3dsync-agent-run'; [ -f '$mainpath/config/secrets.sh' ] && chmod 600 '$mainpath/config/secrets.sh'; true"
   then
-    echo "    OK"
+    echo "    OK (onceki surum varsa .rollback/$INSTALL_TS/ altina yedeklendi)"
   else
     echo "    HATA: $h'a dagitim basarisiz oldu." >&2
     FAILED="$FAILED $h"
   fi
 done
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo
+  echo "==> [DRY RUN] Dagitim adimi atlandi (yukarida listelenen islemler GERCEKTE yapilmadi)."
+fi
 
 if [ -n "$FAILED" ]; then
   echo
@@ -214,7 +273,23 @@ fi
 # remote_batch/remote_queue mantigi da ayni sekilde sifresiz SSH'e
 # BAGIMLIYDI -- bu yeni bir gereksinim degil, sadece ilk defa otomatik
 # tetiklenince fark ediliyor.
-if [ "$SETUP_SSH_KEYS" -eq 1 ]; then
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo
+  if [ "$SETUP_SSH_KEYS" -eq 1 ]; then
+    if [ -z "${host0:-}" ]; then
+      echo "==> [DRY RUN] SSH key kurulumu ATLANIRDI ('host0' env.sh'de tanimli degil)."
+    else
+      echo "==> [DRY RUN] SSH key kurulumu yapilacakti:"
+      echo "      1. $host0'da (yoksa) 'ssh-keygen -t rsa -b 4096' ile anahtar olusturulacak"
+      for h in $HOSTS; do
+        echo "      2. $host0 -> $h: public key ~/.ssh/authorized_keys'e eklenecek (sifresiz erisim)"
+      done
+      echo "      3. $host0'dan tum host'lara sifresiz erisim DOGRULANACAK"
+    fi
+  else
+    echo "==> [DRY RUN] --no-ssh-keys verildi, SSH key kurulumu zaten atlanacakti."
+  fi
+elif [ "$SETUP_SSH_KEYS" -eq 1 ]; then
   if [ -z "${host0:-}" ]; then
     echo
     echo "UYARI: 'host0' env.sh'de tanimli degil -- SSH key kurulumu atlaniyor." >&2
@@ -270,7 +345,16 @@ else
   echo "==> --no-ssh-keys verildi, SSH key kurulumu atlandi."
 fi
 
-cat <<MSG
+if [ "$DRY_RUN" -eq 1 ]; then
+  cat <<MSG
+
+==> [DRY RUN] tamamlandi -- HICBIR host'a dokunulmadi, hicbir dosya
+    kopyalanmadi/degistirilmedi, hicbir SSH anahtari kurulmadi.
+    Yukaridaki listeyi gozden gecirin; sorun yoksa ayni komutu
+    --dry-run OLMADAN tekrar calistirin.
+MSG
+else
+  cat <<MSG
 
 ==> Dagitim tamamlandi.
 
@@ -285,4 +369,9 @@ Bunlar calistiktan sonra README_MIGRATION.md'deki siraya gore (once
 izole, geri alinabilir adimlar; fullindex/db-restore'dan once yedek)
 devam edin. "orchestrate" komutunu run_full_sync.sh'nin YERINE
 gecirmeden once mutlaka bir TEST/QA ortaminda tam calistirin.
+
+NOT: bu dagitimdan ONCEKI binary/wrapper/env.sh/secrets.sh (varsa) her
+host'ta '$mainpath/.rollback/$INSTALL_TS/' altina yedeklendi. Bu surum
+sorunlu cikarsa: ./rollback.sh $ENV_FILE${SECRETS_FILE:+ $SECRETS_FILE}
 MSG
+fi
