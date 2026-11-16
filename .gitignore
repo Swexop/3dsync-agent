@@ -13,3 +13,8 @@
 *.lic
 *license-private.key
 /cmd/license-gen/license-gen
+
+# Musteriye ozel kurulum dosyalari: secrets.sh her zaman gizli parola/
+# kimlik bilgisi icerir -- repoya ASLA girmemeli (env.sh gizli degildir,
+# o yuzden burada degil).
+customers/*/secrets.sh
