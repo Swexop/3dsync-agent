@@ -4,11 +4,17 @@
 # dagitir. Tek komutla kurulum icin yazildi.
 #
 # KULLANIM:
-#   ./install.sh /path/to/config/env.sh [/path/to/config/secrets.sh]
+#   ./install.sh /path/to/config/env.sh [/path/to/config/secrets.sh] [/path/to/config/license.lic]
 #   ./install.sh --customer <ad>
-#     -- yukaridakinin kisayoli: customers/<ad>/env.sh ve
-#     customers/<ad>/secrets.sh dosyalarini kullanir (COK SAYIDA
-#     musteri/kurulumu ayri dizinlerde tutmak icin -- bkz. customers/README.md).
+#     -- yukaridakinin kisayoli: customers/<ad>/env.sh,
+#     customers/<ad>/secrets.sh VE customers/<ad>/license.lic
+#     dosyalarini kullanir (COK SAYIDA musteri/kurulumu ayri
+#     dizinlerde tutmak icin -- bkz. customers/README.md).
+#   license.lic OPSIYONELDIR ama ONEMLIDIR: 3dsync-agent, "version"/
+#   "validate-config"/"init-config" DISINDAKI HICBIR komutu (orchestrate
+#   dahil) gecerli bir license.lic OLMADAN CALISTIRMAZ (bkz.
+#   internal/license). Bu dosya license-gen araciyla (KhanTech ic
+#   kullanimi, musteriye gitmez) uretilir.
 #   --dry-run    HICBIR host'a SSH/scp ATMADAN (ve SSH key kurmadan),
 #                sadece NELERIN yapilacagini listeler. Yeni bir musteriye
 #                ilk kurulumdan once, veya env.sh degisikliginden sonra
@@ -29,10 +35,13 @@
 #      iletir; siz elle "source env.sh && ..." yazmazsiniz.
 #   3. env.sh'den host0..host9'u toplar (tekrarlari eler), her birine
 #      scp ile binary + sarmalayiciyi KOPYALAR, chmod +x yapar; AYRICA
-#      config/env.sh (+secrets.sh varsa) dosyalarini da HER host'a
-#      ($mainpath/config/ altina) kopyalar -- sarmalayici, ic SSH
-#      fan-out'u sirasinda her hostun KENDI env.sh'ini kaynaklamak
-#      zorunda (nested SSH, surecin ortam degiskenlerini miras almaz).
+#      config/env.sh (+secrets.sh, +license.lic -- hangileri verildiyse)
+#      dosyalarini da HER host'a ($mainpath/config/ altina) kopyalar --
+#      sarmalayici, ic SSH fan-out'u sirasinda her hostun KENDI env.sh'ini
+#      kaynaklamak zorunda (nested SSH, surecin ortam degiskenlerini
+#      miras almaz); lisans kontrolu de HER host'un KENDI license.lic'ine
+#      bakar (bkz. internal/license), bu yuzden her host'a kopyalanmasi
+#      gerekir.
 #   4. host0'da (yoksa) bir SSH anahtari olusturur ve bunu DIGER TUM
 #      host'larin ~/.ssh/authorized_keys'ine ekler -- "trigger" komutlari
 #      (verify-services, service-stop, store-sync, vb.) host0'dan diger
@@ -76,6 +85,7 @@ if [ -n "$CUSTOMER" ]; then
   fi
   ENV_FILE="$SCRIPT_DIR_EARLY/customers/$CUSTOMER/env.sh"
   SECRETS_FILE="$SCRIPT_DIR_EARLY/customers/$CUSTOMER/secrets.sh"
+  LICENSE_FILE="$SCRIPT_DIR_EARLY/customers/$CUSTOMER/license.lic"
   if [ ! -f "$ENV_FILE" ]; then
     echo "HATA: '$ENV_FILE' bulunamadi -- once bu musteri icin env.sh'i olusturun, orn.:" >&2
     echo "        ./3dsync-agent init-config --template AutoSync/config/env.sh \\" >&2
@@ -86,10 +96,11 @@ if [ -n "$CUSTOMER" ]; then
 else
   ENV_FILE="${POSITIONAL[0]:-}"
   SECRETS_FILE="${POSITIONAL[1]:-}"
+  LICENSE_FILE="${POSITIONAL[2]:-}"
 fi
 
 if [ -z "$ENV_FILE" ] || [ ! -f "$ENV_FILE" ]; then
-  echo "Kullanim: $0 /path/to/config/env.sh [/path/to/config/secrets.sh] [--no-ssh-keys] [--dry-run]" >&2
+  echo "Kullanim: $0 /path/to/config/env.sh [/path/to/config/secrets.sh] [/path/to/config/license.lic] [--no-ssh-keys] [--dry-run]" >&2
   echo "      veya: $0 --customer <ad> [--no-ssh-keys] [--dry-run]" >&2
   exit 1
 fi
@@ -197,6 +208,18 @@ if [ -n "$SECRETS_FILE" ] && [ -f "$SECRETS_FILE" ]; then
   HAS_SECRETS=1
 fi
 
+HAS_LICENSE=0
+if [ -n "${LICENSE_FILE:-}" ] && [ -f "$LICENSE_FILE" ]; then
+  HAS_LICENSE=1
+fi
+if [ "$HAS_LICENSE" -eq 0 ]; then
+  echo "UYARI: license.lic verilmedi/bulunamadi -- 3dsync-agent bu host'larda"
+  echo "       'version'/'validate-config'/'init-config' DISINDAKI HICBIR komutu"
+  echo "       (orchestrate dahil) CALISTIRMAYACAK. Lisans dosyasi daha sonra"
+  echo "       elle '\$mainpath/config/license.lic' olarak her host'a kopyalanabilir."
+  echo
+fi
+
 # INSTALL_TS: bu calistirmaya ait TEK bir zaman damgasi -- asagidaki
 # yedekleme adiminda HER host'ta AYNI klasor adi (.rollback/$INSTALL_TS/)
 # kullanilir, boylece bir sonraki "rollback.sh" cagrisi butun host'lari
@@ -223,6 +246,9 @@ for h in $HOSTS; do
     if [ "$HAS_SECRETS" -eq 1 ]; then
       echo "    [DRY RUN] scp $SECRETS_FILE -> $user@$h:$mainpath/config/secrets.sh"
     fi
+    if [ "$HAS_LICENSE" -eq 1 ]; then
+      echo "    [DRY RUN] scp $LICENSE_FILE -> $user@$h:$mainpath/config/license.lic"
+    fi
     echo "    [DRY RUN] chmod +x binary+wrapper, chmod 600 secrets.sh (varsa)"
     continue
   fi
@@ -236,13 +262,15 @@ for h in $HOSTS; do
     && { [ -f '$mainpath/3dsync-agent' ] && cp -a '$mainpath/3dsync-agent' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
     && { [ -f '$mainpath/3dsync-agent-run' ] && cp -a '$mainpath/3dsync-agent-run' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
     && { [ -f '$mainpath/config/env.sh' ] && cp -a '$mainpath/config/env.sh' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
-    && { [ -f '$mainpath/config/secrets.sh' ] && cp -a '$mainpath/config/secrets.sh' '$mainpath/.rollback/$INSTALL_TS/' || true; }"
+    && { [ -f '$mainpath/config/secrets.sh' ] && cp -a '$mainpath/config/secrets.sh' '$mainpath/.rollback/$INSTALL_TS/' || true; } \
+    && { [ -f '$mainpath/config/license.lic' ] && cp -a '$mainpath/config/license.lic' '$mainpath/.rollback/$INSTALL_TS/' || true; }"
   if ssh -o ConnectTimeout=10 "$user@$h" "$BACKUP_CMD" \
      && ssh "$user@$h" "mkdir -p '$mainpath/config'" \
      && scp -q "$BINARY" "$user@$h:$mainpath/3dsync-agent" \
      && scp -q "$WRAPPER" "$user@$h:$mainpath/3dsync-agent-run" \
      && scp -q "$ENV_FILE" "$user@$h:$mainpath/config/env.sh" \
      && { [ "$HAS_SECRETS" -eq 0 ] || scp -q "$SECRETS_FILE" "$user@$h:$mainpath/config/secrets.sh"; } \
+     && { [ "$HAS_LICENSE" -eq 0 ] || scp -q "$LICENSE_FILE" "$user@$h:$mainpath/config/license.lic"; } \
      && ssh "$user@$h" "chmod +x '$mainpath/3dsync-agent' '$mainpath/3dsync-agent-run'; [ -f '$mainpath/config/secrets.sh' ] && chmod 600 '$mainpath/config/secrets.sh'; true"
   then
     echo "    OK (onceki surum varsa .rollback/$INSTALL_TS/ altina yedeklendi)"

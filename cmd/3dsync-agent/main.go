@@ -27,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"khantech.com/3dsync-agent/internal/configgen"
@@ -35,6 +36,7 @@ import (
 	"khantech.com/3dsync-agent/internal/fcssync"
 	"khantech.com/3dsync-agent/internal/fullindex"
 	"khantech.com/3dsync-agent/internal/initconfig"
+	"khantech.com/3dsync-agent/internal/license"
 	"khantech.com/3dsync-agent/internal/mqlstore"
 	"khantech.com/3dsync-agent/internal/orchestrate"
 	"khantech.com/3dsync-agent/internal/postsync"
@@ -54,6 +56,8 @@ func main() {
 
 	cmd := os.Args[1]
 	args := os.Args[2:]
+
+	checkLicense(cmd)
 
 	switch cmd {
 	case "orchestrate":
@@ -161,6 +165,76 @@ func main() {
 // ============================================================
 // Ortak yardimcilar
 // ============================================================
+
+// ============================================================
+// Lisans kontrolu
+// ============================================================
+
+// licenseExemptCommands, gecerli bir license.lic OLMADAN da calismasi
+// GEREKEN komutlardir -- kurulum oncesi/kurulum sirasi araclari: musteri
+// henuz lisans dosyasina sahip olmadan da env.sh'ini dogrulayabilsin
+// (validate-config), config/env.sh uretebilsin (init-config) ve surum
+// numarasini gorebilsin (version) diye. BUNUN DISINDAKI HER KOMUT,
+// gercek is yapan komutlardir (orchestrate ve onun cagirdigi tum
+// trigger/-run alt-komutlari dahil) ve lisans GEREKTIRIR -- yeni bir
+// alt-komut eklendiginde bu listeye BILINCLI olarak eklenmedigi surece
+// otomatik olarak lisans kontrolune tabi olur (varsayilan-kapali/
+// default-deny yaklasimi, "unutulup lisanssiz calisan yeni bir komut"
+// riskini ortadan kaldirir).
+var licenseExemptCommands = map[string]bool{
+	"version":         true,
+	"validate-config": true,
+	"init-config":     true,
+}
+
+// checkLicense, main()'in EN BASINDA, herhangi bir is yapilmadan once
+// cagrilir. mainpath bos ise (env.sh henuz kaynaklanmamis) sessizce
+// cikar -- bu zaten ayri, daha acik bir hataya (mustEnv) yol acacaktir,
+// burada tekrarlanmaya gerek yok.
+func checkLicense(cmd string) {
+	if licenseExemptCommands[cmd] {
+		return
+	}
+
+	mainpath := os.Getenv("mainpath")
+	if mainpath == "" {
+		return
+	}
+
+	path := mainpath + "/config/license.lic"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "HATA: lisans dosyasi bulunamadi/okunamadi ('%s'): %v\n", path, err)
+		fmt.Fprintln(os.Stderr, "3dsync-agent gecerli bir lisans olmadan calismaz. Lutfen KhanTech ile iletisime gecin.")
+		os.Exit(1)
+	}
+
+	lic, err := license.Verify(strings.TrimSpace(string(data)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "HATA: lisans dosyasi gecersiz: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Lisans belirli bir host'a sabitlenmisse (HostFingerprint bos
+	// degilse) ve bu host'un kimligi hesaplanamiyorsa, bunu Evaluate()'e
+	// BOS bir fingerprint olarak gecirip sanki "uyusmuyor" gibi
+	// davranmak yaniltici olur (gercek bir kopyalama degil, bir ortam
+	// hatasi) -- bu yuzden burada AYRI, acik bir hata basilir.
+	fp, fpErr := license.HostFingerprint()
+	if lic.HostFingerprint != "" && fpErr != nil {
+		fmt.Fprintf(os.Stderr, "HATA: bu lisans belirli bir host'a sabitlenmis ama bu host'un kimligi hesaplanamadi: %v\n", fpErr)
+		os.Exit(1)
+	}
+
+	res := license.Evaluate(lic, time.Now(), fp, license.DefaultWarnBefore, license.DefaultGracePeriod)
+	switch res.Status {
+	case license.StatusWarning, license.StatusGrace:
+		fmt.Fprintln(os.Stderr, res.Message)
+	case license.StatusBlocked:
+		fmt.Fprintln(os.Stderr, res.Message)
+		os.Exit(1)
+	}
+}
 
 func mustEnv(name string) string {
 	v := os.Getenv(name)

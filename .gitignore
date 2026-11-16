@@ -5,3 +5,11 @@
 # go test gecici dosyalari
 *.test
 *.out
+
+# Lisanslama: private key ve uretilmis lisans dosyalari -- BUNLAR ASLA
+# bu repoya girmemeli (private key SIR, license.lic musteriye OZEL).
+# license-gen aracinin kendisi (kaynak kodu) commit'lenir, SADECE
+# urettigi dosyalar/anahtarlar burada halicleniyor.
+*.lic
+*license-private.key
+/cmd/license-gen/license-gen

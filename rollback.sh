@@ -157,7 +157,7 @@ for h in $HOSTS; do
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "    [DRY RUN] $BACKUP_DIR -> $mainpath/{3dsync-agent,3dsync-agent-run,config/env.sh,config/secrets.sh} (hangileri yedekte varsa)"
+    echo "    [DRY RUN] $BACKUP_DIR -> $mainpath/{3dsync-agent,3dsync-agent-run,config/env.sh,config/secrets.sh,config/license.lic} (hangileri yedekte varsa)"
     continue
   fi
 
@@ -166,6 +166,7 @@ for h in $HOSTS; do
     && { [ -f 3dsync-agent-run ] && cp -a 3dsync-agent-run '$mainpath/3dsync-agent-run' || true; } \
     && { [ -f env.sh ] && cp -a env.sh '$mainpath/config/env.sh' || true; } \
     && { [ -f secrets.sh ] && cp -a secrets.sh '$mainpath/config/secrets.sh' && chmod 600 '$mainpath/config/secrets.sh' || true; } \
+    && { [ -f license.lic ] && cp -a license.lic '$mainpath/config/license.lic' || true; } \
     && chmod +x '$mainpath/3dsync-agent' '$mainpath/3dsync-agent-run' 2>/dev/null; true"
 
   if ssh "$user@$h" "$RESTORE_CMD"; then

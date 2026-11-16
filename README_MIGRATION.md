@@ -411,3 +411,43 @@ scp'lenen dosyalara olan ihtiyacı ortadan kaldırdı.
   için mevcut izleme/log toplama araçlarıyla okunabilir); ileride
   istenirse bu dosyayı okuyup bildirim gönderen ayrı, küçük bir adım
   olarak eklenebilir.
+
+## Faz 5: Lisanslama (offline, imzali lisans dosyasi) (2026-11-16)
+
+Musteriler genelde ag'i disariya kapali (izole) ortamlar kullandigi icin
+lisans tamamen OFFLINE dogrulanir -- hicbir "phone-home" YOK.
+
+- **`internal/license`**: `License` (musteri adi, bitis tarihi, opsiyonel
+  host-fingerprint) Ed25519 ile imzalanip tek-satirlik bir token olarak
+  `license.lic` dosyasina yazilir. Binary'nin icine SADECE **public key**
+  gomulu (`PublicKeyHex`) -- bu acik edilebilir, imzayi dogrulamaya
+  yarar, YENI lisans uretmeye yaramaz.
+- **`cmd/license-gen`** (AYRI bir binary, **musteriye GITMEZ** -- ne
+  `build.sh` ne `install.sh` ne de CI'nin `release-binary` job'u bunu
+  derler/dagitir): private key'i kullanip müşteriye özel `license.lic`
+  üretir. `-genkeypair` ile yeni bir anahtar çifti de üretebilir (anahtar
+  rotasyonu icin -- DIKKAT: bu TUM eski lisanslari gecersiz kilar).
+- **`main.go`**'da `checkLicense()`: `version`/`validate-config`/
+  `init-config` DISINDAKI HER komuttan once (`orchestrate` dahil, varsayilan-
+  kapali/default-deny yaklasimiyla -- yeni bir komut eklenirse otomatik
+  lisans kontrolune tabi olur) `$mainpath/config/license.lic` okunup
+  dogrulanir:
+  - Lisans yok/bozuk/imza gecersiz → **sert blok** (`os.Exit(1)`).
+  - Host-fingerprint (`/etc/machine-id` SHA-256'si) uyusmuyor → **sert
+    blok** (bu bir zamanlama meselesi degil, kopyalama/ihlal durumu).
+  - Suresi dolmadan **30 gun once**'den itibaren **uyari** basilir, komut
+    CALISIR.
+  - Suresi dolunca **14 gunluk grace period** baslar -- komut HALA
+    CALISIR ama her calistirmada SERT bir uyari basilir.
+  - Grace period de asilinca **sert blok**.
+- **`install.sh`**: `secrets.sh` ile AYNI konvansiyonla opsiyonel bir
+  ucuncu dosya (`license.lic`, `--customer` modunda
+  `customers/<ad>/license.lic`) her host'a `$mainpath/config/` altina
+  kopyalanir; `rollback.sh` da onceki `license.lic`'i geri yukler.
+  `license.lic` verilmezse kurulum YINE DE TAMAMLANIR ama acik bir UYARI
+  basilir (lisans daha sonra elle teslim edilebilir).
+
+13 birim testi (`internal/license/license_test.go`): imza round-trip,
+sahte/tahrif edilmis token'larin reddi, host-fingerprint uyusmazliginin
+sureden BAGIMSIZ olarak her zaman blok etmesi, tum sure esiklerinin
+(OK/warning/grace/blocked) sinir degerleri.
