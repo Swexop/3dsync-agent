@@ -1,0 +1,7 @@
+# Derlenmis binary (build.sh / CI tarafindan uretilir, kaynak degil)
+/3dsync-agent
+/3dsync-agent-*
+
+# go test gecici dosyalari
+*.test
+*.out

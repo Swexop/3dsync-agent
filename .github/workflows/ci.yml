@@ -1,0 +1,66 @@
+name: CI
+
+# 3dsync-agent icin surekli entegrasyon: her push/PR'da derleme +
+# statik analiz + testler. Repo bir GitHub/GitLab vb. hosting'e
+# tasindiginda bu workflow dosyasi oldugu gibi calisir -- ek kurulum
+# gerektirmez (go.mod zaten tek bagimlilik kaynagi, harici servis yok).
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -v
+
+      - name: gofmt kontrolu
+        run: |
+          UNFORMATTED="$(gofmt -l .)"
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Asagidaki dosyalar 'gofmt -w' gerektiriyor:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+  # Etiketli (v*) push'larda, linux/amd64 icin derleyip surum
+  # numarasini binary'ye gomer ve bir GitHub Release'e ekler. Bu job,
+  # repo bir GitHub remote'una sahip olana kadar TETIKLENMEZ (tag push
+  # olmadan calismaz) -- yerel/dahili kullanimda zararsizdir.
+  release-binary:
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe icin tag gecmisi gerekir
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Surumlu binary derle
+        run: |
+          VERSION="$(git describe --tags --always --dirty)"
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.buildVersion=$VERSION" -o 3dsync-agent ./cmd/3dsync-agent
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: 3dsync-agent
