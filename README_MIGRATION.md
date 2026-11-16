@@ -380,3 +380,34 @@ oluşuyor. Bu aynı zamanda `02_deploy.sh`'ın "artık her host'a binary de
 deploy edilmeli" notunu da gereksiz kıldı (install.sh zaten bunu
 yapıyor) ve `03_fcs`/`verify_fcs.sh`/`01_stop_fcs.sh` gibi tek tek
 scp'lenen dosyalara olan ihtiyacı ortadan kaldırdı.
+
+## Faz 4: install.sh dry-run + rollback + otomatik sağlık raporu (2026-11-16)
+
+- **`install.sh --dry-run`**: her mutasyon yapan uzak işlemi (scp/ssh
+  dağıtımı, SSH key kurulumu) gerçekten çalıştırmadan `[DRY RUN]` plan
+  satırları olarak basar. `go build` ve `validate-config --skip-ssh`
+  gerçekten çalışır (zaten hiçbir uzak host'a dokunmuyorlar).
+- **Otomatik yedekleme + `rollback.sh`**: `install.sh`, her host'a
+  dağıtımdan ÖNCE o host'taki mevcut binary/wrapper/env.sh/secrets.sh
+  dosyalarını (hangileri varsa) tek bir paylaşılan zaman damgası
+  altında `$mainpath/.rollback/<TS>/` klasörüne otomatik yedekler.
+  `rollback.sh`, BİLEREK `3dsync-agent` binary'sinin bir alt-komutu
+  DEĞİL — standalone bir script: rollback'in var olma amacı "yeni
+  dağıtılan binary bozuk olabilir" senaryosu, o yüzden rollback
+  mantığı o binary'nin sağlığına bağımlı olmamalı (tavuk-yumurta
+  sorunu). Sadece `ssh`/`scp`/`cp` kullanır; `--list`, `--to TS`,
+  `--dry-run`, `--customer <ad>` bayraklarını destekler.
+- **Otomatik sağlık raporu**: `internal/orchestrate` artık her
+  `Sequence()` çalışmasında, çalıştırılan HER adımın adını/süresini/
+  hatasını bir `Report`'a kaydediyor (yeni `report.go`) ve
+  `Sequence()` NASIL biterse bitsin (başarılı ya da ilk hatada erken
+  `return` ile) bu raporu `defer` ile konsola basıyor ve diğer
+  adımların kendi çıktılarını yazdığı AYNI konvansiyonla
+  `$mainpath/SyncResult/health_report_<zaman>.txt` dosyasına
+  kaydediyor. Rapor dosyaya yazılamazsa (örn. `mainpath` boş/disk
+  dolu) bu sadece bir UYARI'dır — senkronizasyonun kendi başarı/
+  başarısızlık sonucunu ETKİLEMEZ. E-posta/Slack bildirimi şimdilik
+  KAPSAM DIŞI bırakıldı (bu dosya zaten merkezi bir konumda durduğu
+  için mevcut izleme/log toplama araçlarıyla okunabilir); ileride
+  istenirse bu dosyayı okuyup bildirim gönderen ayrı, küçük bir adım
+  olarak eklenebilir.
