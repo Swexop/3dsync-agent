@@ -32,10 +32,12 @@ import (
 	"khantech.com/3dsync-agent/internal/configgen"
 	"khantech.com/3dsync-agent/internal/crond"
 	"khantech.com/3dsync-agent/internal/dbsync"
+	"khantech.com/3dsync-agent/internal/fcssync"
 	"khantech.com/3dsync-agent/internal/fullindex"
 	"khantech.com/3dsync-agent/internal/initconfig"
 	"khantech.com/3dsync-agent/internal/mqlstore"
 	"khantech.com/3dsync-agent/internal/orchestrate"
+	"khantech.com/3dsync-agent/internal/postsync"
 	"khantech.com/3dsync-agent/internal/preflight"
 	"khantech.com/3dsync-agent/internal/sshrun"
 	"khantech.com/3dsync-agent/internal/threedindex"
@@ -93,6 +95,12 @@ func main() {
 	case "service-stop-run":
 		cmdServiceStopRun(args)
 
+	// --- FCS kopyalama (03_fcs) ---
+	case "fcs-trigger":
+		cmdFCSTrigger()
+	case "fcs-run":
+		cmdFCSRun()
+
 	// --- crond (02_task_stop / 13_restart_scheduler) ---
 	case "task-stop":
 		dieOn(fanoutAll("task-stop", []string{mustEnv("host3"), mustEnv("host4")}, "crond-stop-run"))
@@ -132,6 +140,17 @@ func main() {
 	// --- reboot sonrasi host bekleme (lib/wait_for_hosts.sh) ---
 	case "wait-for-hosts":
 		cmdWaitForHosts(args)
+
+	// --- log temizligi + servis baslatma (10_clear_logs_and_start_services) ---
+	case "clear-logs-start-services":
+		cmdClearLogsStartServices()
+
+	// --- izin hazirlama (eski setup/01_prepare_permissions.sh +
+	// setup/02_deploy.sh'nin HALA GECERLI olan kismi -- bkz. cmdPreparePermissions
+	// yorumu: dosya dagitimi/dos2unix artik install.sh'in isi, burada
+	// SADECE DB ve config dizinlerindeki calisma-zamani izinleri kalir) ---
+	case "prepare-permissions":
+		cmdPreparePermissions()
 
 	default:
 		usage()
@@ -471,6 +490,34 @@ func cmdServiceStopRun(args []string) {
 }
 
 // ============================================================
+// FCS kopyalama (03_fcs)
+// ============================================================
+
+// cmdFCSTrigger, 03_fcs_trigger.sh'in karsiligidir: host0'dan host5'e
+// SSH ile "fcs-run" cagrisi yapar (fanout1, canli cikti icin RunLive
+// kullanir -- rsync dakikalarca surebilir).
+func cmdFCSTrigger() {
+	host5 := mustEnv("host5")
+	if err := fanout1("fcs-trigger", host5, "fcs-run"); err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("HATA: FCS kopyalama basarisiz oldu: %w", err))
+		os.Exit(1)
+	}
+}
+
+// cmdFCSRun, 03_fcs_worker.sh'in karsiligidir -- host5 UZERINDE calisir,
+// host7'den (PROD/kaynak) rsync ile ayna-modu kopyalama yapar.
+func cmdFCSRun() {
+	cfg := fcssync.Config{
+		SSHUser:  sshUser(),
+		Host7:    mustEnv("host7"),
+		Src1:     mustEnv("src1"),
+		Dest1:    mustEnv("dest1"),
+		MainPath: mustEnv("mainpath"),
+	}
+	dieOn(cfg.Sync())
+}
+
+// ============================================================
 // database (04_database / 05_database_restore)
 // ============================================================
 
@@ -675,6 +722,109 @@ func cmdInitConfig(args []string) {
 	dieOn(err)
 }
 
+// ============================================================
+// log temizligi + servis baslatma (10_clear_logs_and_start_services)
+// ============================================================
+
+// cmdClearLogsStartServices, host0 UZERINDE calisir -- bkz. internal/postsync.
+// "exppath" ve "host9"/"fcstomeepathremote" DISINDA tum degerler o
+// rolun bu musteride var oldugunu varsayar; bir rol yoksa ilgili
+// env degiskeni (orn. "fedsearchtomeepath") bos birakilabilir --
+// postsync.BuildJobs() bos yollari otomatik atlar.
+func cmdClearLogsStartServices() {
+	h := postsync.Hosts{
+		User: sshUser(),
+
+		Host2: mustEnv("host2"),
+		Host3: mustEnv("host3"),
+		Host4: os.Getenv("host4"),
+		Host5: os.Getenv("host5"),
+		Host6: os.Getenv("host6"),
+		Host9: os.Getenv("host9"),
+
+		CommentTomeePath:   os.Getenv("commenttomeepath"),
+		DashboardTomeePath: os.Getenv("dashboardtomeepath"),
+		PassportTomeePath:  os.Getenv("passporttomeepath"),
+		FedsearchTomeePath: os.Getenv("fedsearchtomeepath"),
+		SwymTomeePath:      os.Getenv("swymtomeepath"),
+		SpaceTomeePath:     os.Getenv("spacetomeepath"),
+		InternalTomeePath:  os.Getenv("internaltomeepath"),
+		FCSCentralPath:     os.Getenv("fcstomeepathcentral"),
+		FCSRemotePath:      os.Getenv("fcstomeepathremote"),
+		ExpPath:            os.Getenv("exppath"),
+	}
+	dieOn(h.ClearLogsAndStartServices())
+}
+
+// ============================================================
+// izin hazirlama (eski setup/01_prepare_permissions.sh + setup/02_deploy.sh)
+// ============================================================
+
+// cmdPreparePermissions, eski setup/01_prepare_permissions.sh +
+// setup/02_deploy.sh'nin KALAN gecerli kismidir.
+//
+// NEDEN KUCULDU: 01'in dos2unix + chmod +x islevi ve 02'nin "bash script
+// agacini TUM host'lara scp'leme" islevi, artik install.sh tarafindan
+// FARKLI (ve daha basit) bir modelle zaten yapiliyor -- her host'a tek
+// bir binary + wrapper + env.sh/secrets.sh kopyalaniyor, chmod +x ve
+// secrets.sh icin chmod 600 KURULUM SIRASINDA (install.sh icinde) bir
+// kere uygulaniyor (bkz. install.sh). Dolayisiyla bu iki eski script HER
+// SENKRON CALISTIRMASINDA bash dosyalarini yeniden dagitmaya calisirdi --
+// bu artik hem gereksiz hem de YANLIS (o dosyalar artik hedef hostlarda
+// olmayabilir). KALAN tek gercek is: SQL Server'in VE MQL/config
+// islemlerinin ihtiyac duydugu calisma-zamani izinleri (02_deploy.sh'nin
+// sonundaki "Yetki verme" blogu) -- bu, HER senkrondan once hala
+// calistirilmasi gereken, dosya dagitimiyla ILGISIZ bir adimdir.
+func cmdPreparePermissions() {
+	host1 := mustEnv("host1")
+	host3 := mustEnv("host3")
+	user := sshUser()
+
+	type job struct{ host, cmd string }
+	var jobs []job
+	add := func(host, path, mode string) {
+		if path == "" {
+			return
+		}
+		jobs = append(jobs, job{host, fmt.Sprintf("sudo chmod %s -R %s", mode, path)})
+	}
+
+	// database (host1): sqlpath/sqldata/sqllog HER ZAMAN, sqlindex
+	// SADECE tanimliysa (bazi ortamlarda -- orn. DEV -- gecerli/kullanilmiyor).
+	add(host1, os.Getenv("sqlpath"), "777")
+	add(host1, os.Getenv("sqldata"), "777")
+	add(host1, os.Getenv("sqllog"), "777")
+	add(host1, os.Getenv("sqlindex"), "777")
+
+	// space (host3): config.xml uretim/dogrulama icin config/ dizini.
+	// NOT: orijinalde "$mainpath/steps" de vardi -- artik bash script
+	// agaci dagitilmadigi icin o kisim KALDIRILDI (atilacak bir
+	// 'steps/' dizini yok).
+	add(host3, mustEnv("mainpath")+"/config", "775")
+
+	if len(jobs) == 0 {
+		fmt.Println("[prepare-permissions] izin verilecek hicbir yol tanimli degil (sqlpath/sqldata/sqllog/sqlindex hepsi bos) -- atlaniyor.")
+		return
+	}
+
+	var fail bool
+	for _, j := range jobs {
+		t := sshrun.Target{User: user, Host: j.host}
+		out, err := sshrun.Run(t, j.cmd)
+		if out != "" {
+			fmt.Print(out)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[prepare-permissions] UYARI: %s@%s uzerinde '%s' basarisiz: %v\n", user, j.host, j.cmd, err)
+			fail = true
+		}
+	}
+	if fail {
+		os.Exit(1)
+	}
+	fmt.Println("[prepare-permissions] tamamlandi.")
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `3dsync-agent <komut> [bayraklar/argumanlar]
 
@@ -687,13 +837,16 @@ Ana komut:
 Trigger komutlari (host0'da calisir, hedef host'lara SSH ile fan-out yapar):
   service-stop                 Tum TomEE/cvinit servislerini durdurur
   task-stop                    host3+host4'te crond durdurur
+  fcs-trigger                   FCS kopyalamayi (rsync ayna) host5'te tetikler
   store-sync                   06_store MQL sirasini host3'te calistirir
   db-sync                      DB backup+restore'u host1'de calistirir
   config-sync                  08_config MQL+dogrulama sirasini host3'te calistirir
+  clear-logs-start-services     Log temizligi + tum servisleri baslatir (10)
   verify-services              Tum servislerin ayakta oldugunu dogrular
   fullindex [--clear-acl]      Fullindex sirasini host3'te tetikler
   3dindex-trigger               3DIndex'i host4'te tetikler
   restart-scheduler             host3+host4'te crond yeniden baslatir
+  prepare-permissions           DB + config dizinlerinde calisma-zamani izinlerini ayarlar
   wait-for-hosts <host...>      SSH geri gelene kadar bekler (reboot sonrasi)
 
 "-run" komutlari (ilgili hedef host UZERINDE calisir, genelde trigger
@@ -701,7 +854,7 @@ komutlari tarafindan ssh ile cagrilir, elle de calistirilabilir):
   generate-config, store-sync-run, config-sync-run (beforemod/modconfig/
   aftermod/verify'in TUMUNU TEK SSH'de calistirir), service-stop-run <rol>,
   verify-run <rol>, crond-stop-run, crond-restart-run, db-backup-run,
-  db-restore-run, fullindex-run [--clear-acl], threedindex-run
+  db-restore-run, fullindex-run [--clear-acl], threedindex-run, fcs-run
 
   version                        Surum bilgisini gosterir`)
 }

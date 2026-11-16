@@ -343,6 +343,40 @@ kod tarafi (env/sarmalayici) zaten dogrulandi.
   eklenebilir.
 - `secrets.sh`'in her sunucuya düz metin `scp` edilmesi sorunu (bkz. önceki
   güvenlik bulgusu) — bu göçten bağımsız, ayrıca çözülmeli.
-- `setup/02_deploy.sh`'a, artık her host'a `.sh` dosyaları yanında
-  `3dsync-agent` binary'sinin de deploy edilmesi eklenmeli (bkz. "Deploy"
-  bölümü) — bu script henüz migrate edilmedi, elle güncellenmesi gerekiyor.
+
+## Kalan legacy bash adımları da migrate edildi (2026-11-16)
+
+Ürünleştirme Faz 3'ün bilerek ertelenen son kalemi: `orchestrate.go`'da
+hâlâ eski bash script'lere SSH ile çağrı yapan 4 adım kalmıştı
+(`legacyStep(...)`). Hepsi bu oturumda Go'ya taşındı:
+
+- **`03_fcs_trigger.sh`/`03_fcs_worker.sh` → `fcs-trigger`/`fcs-run`**
+  (yeni paket: `internal/fcssync`). İki katmanlı yapı (host0→host5
+  trigger, host5→host7 rsync) birebir korundu; rsync'in itemize-changes
+  çıktısından eklenen/güncellenen/silinen sayısını çıkaran mantık SAF
+  bir fonksiyona (`CountChangesFromLines`) ayrıldı ve birim testiyle
+  doğrulandı.
+- **`10_clear_logs_and_start_services.sh` → `clear-logs-start-services`**
+  (yeni paket: `internal/postsync`). Host başına temizlik→başlatma
+  sırası ve HAProxy'nin otomatik-tespit mantığı (`verify.LB()` ile aynı
+  ruh) korundu; tüm iş listesi oluşturma mantığı SAF bir fonksiyona
+  (`BuildJobs`) ayrılarak SSH olmadan test edilebilir hale getirildi
+  (5 birim testi).
+- **`setup/01_prepare_permissions.sh` + `setup/02_deploy.sh` →
+  `prepare-permissions`** (önemli mimari not): bu iki script'in
+  dos2unix/chmod +x/bash-ağacı-scp'leme işlevi artık **tamamen
+  gereksiz** — çünkü `install.sh` zaten TEK SEFERLİK olarak her host'a
+  binary+wrapper+env.sh/secrets.sh dağıtıyor, `chmod +x` ve
+  `secrets.sh` için `chmod 600`'ü KURULUM SIRASINDA uyguluyor (bkz.
+  `install.sh`). Bu iki adımı HER SENKRONDA tekrar çalıştırmak hem
+  gereksizdi hem de artık YANLIŞ olurdu (dağıtılmayan bash dosyalarını
+  arar). `prepare-permissions` SADECE hâlâ geçerli olan kısmı korudu:
+  host1'de `sqlpath`/`sqldata`/`sqllog`/`sqlindex` için `chmod 777`,
+  host3'te `mainpath/config` için `chmod 775`.
+
+Sonuç: `orchestrate.go`'da artık **tek bir `legacyStep` çağrısı kalmadı**
+— `Sequence()`'in her adımı derlenmiş `3dsync-agent` alt-komutlarından
+oluşuyor. Bu aynı zamanda `02_deploy.sh`'ın "artık her host'a binary de
+deploy edilmeli" notunu da gereksiz kıldı (install.sh zaten bunu
+yapıyor) ve `03_fcs`/`verify_fcs.sh`/`01_stop_fcs.sh` gibi tek tek
+scp'lenen dosyalara olan ihtiyacı ortadan kaldırdı.

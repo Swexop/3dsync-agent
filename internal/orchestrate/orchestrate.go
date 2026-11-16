@@ -6,13 +6,11 @@
 // olmasi gerektigi) -- bu bilgi, PLM ortamlariyla calisilarak ogrenilmis
 // operasyonel tecrubedir ve asil korunmasi gereken budur.
 //
-// Bu surum, gecis donemi (hibrit) icin tasarlandi: Migrated==true olan
-// adimlar artik uzak sunucuda calisan 3dsync-agent binary'sinin kendi
-// alt-komutlarini cagirir (ornegin "generate-config"); Migrated==false
-// olanlar ise HENUZ eski bash script yoluna ssh ile cagri yapmaya devam
-// eder (legacy path, degismedi). Zamanla her adim Migrated=true tarafina
-// gecirilerek, musteri tarafinda duz metin bash script SAYISI adim adim
-// azaltilir.
+// TUM adimlar artik migrate edildi: her adim, uzak sunucuda deploy
+// edilmis 3dsync-agent binary'sinin kendi alt-komutunu (agentStep)
+// cagirir -- musteri tarafinda calistirilmasi gereken duz metin bash
+// script KALMADI (eski "legacy bash script yolu" tamamen kaldirildi;
+// bkz. git gecmisinde "legacyStep" icin son referans).
 package orchestrate
 
 import (
@@ -52,9 +50,8 @@ func FromEnvAndFlags(clearACL, with3DIndex bool) Config {
 	}
 }
 
-// step, tek bir orkestrasyon adimini temsil eder: ya eski bash script
-// yoluna (legacy=true) ya da yeni derlenmis agent alt-komutuna
-// (legacy=false) ssh ile cagri yapar.
+// step, tek bir orkestrasyon adimini temsil eder: derlenmis agent
+// alt-komutuna ssh ile cagri yapar.
 type step struct {
 	name   string
 	target sshrun.Target
@@ -63,10 +60,6 @@ type step struct {
 
 func (c Config) target() sshrun.Target {
 	return sshrun.Target{User: c.User, Host: c.Host0}
-}
-
-func (c Config) legacyStep(name, relPath string) step {
-	return step{name: name, target: c.target(), cmd: c.MainPath + "/" + relPath}
 }
 
 func (c Config) agentStep(name, subcommand string) step {
@@ -95,11 +88,12 @@ func (c Config) Sequence() error {
 		fmt.Println("==============================================================")
 	}
 
-	// Adim 0: izin + deploy (henuz migrate edilmedi, legacy).
-	if err := c.legacyStep("prepare-permissions", "setup/01_prepare_permissions.sh").run(); err != nil {
-		return err
-	}
-	if err := c.legacyStep("deploy", "setup/02_deploy.sh").run(); err != nil {
+	// Adim 0: izin hazirlama -- ARTIK MIGRATE EDILDI ("prepare-permissions").
+	// ESKI "deploy" adimi (setup/02_deploy.sh'in bash-agaci scp'leme kismi)
+	// TAMAMEN KALDIRILDI: artik install.sh'in tek seferlik isi (binary +
+	// wrapper + env.sh/secrets.sh dagitimi, bkz. o dosyadaki yorum) --
+	// HER senkronda tekrar calistirilmasina gerek yok/yanlis olur.
+	if err := c.agentStep("prepare-permissions", "prepare-permissions").run(); err != nil {
 		return err
 	}
 
@@ -116,11 +110,10 @@ func (c Config) Sequence() error {
 	// Adim 3 (FCS) ARKA PLANDA baslatilir -- store/config/servis
 	// adimlariyla PARALEL calisir, SADECE fullindex'ten once bitmis
 	// olmasi beklenir (asil bilgi tam burada: hangi adimin neyle
-	// paralel, neyle sirali oldugu). FCS kopyalama henuz migrate
-	// edilmedi (dusuk oncelikli, generic rsync/scp glue) -- legacy.
+	// paralel, neyle sirali oldugu). ARTIK MIGRATE EDILDI ("fcs-trigger").
 	fcsErr := make(chan error, 1)
 	go func() {
-		fcsErr <- c.legacyStep("fcs-trigger", "steps/03_fcs/03_fcs_trigger.sh").run()
+		fcsErr <- c.agentStep("fcs-trigger", "fcs-trigger").run()
 	}()
 	fmt.Println("FCS kopyalama arka planda baslatildi -- store/config/servis adimlariyla PARALEL devam edilecek, sadece fullindex'ten once beklenecek.")
 
@@ -153,8 +146,9 @@ func (c Config) Sequence() error {
 	}
 	fmt.Println("Step 6+8 Completed: Store + Config degisikligi uygulandi ve URL dogrulandi")
 
-	// Adim 10: servisleri baslat (legacy -- generic start/clear-logs glue).
-	if err := c.legacyStep("clear-logs-start-services", "steps/10_clear_logs_and_start_services.sh").run(); err != nil {
+	// Adim 10: log temizligi + servisleri baslat -- ARTIK MIGRATE EDILDI
+	// ("clear-logs-start-services").
+	if err := c.agentStep("clear-logs-start-services", "clear-logs-start-services").run(); err != nil {
 		return err
 	}
 
