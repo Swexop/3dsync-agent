@@ -11,6 +11,57 @@ import (
 	"time"
 )
 
+// systemChecker, bu paketin yaptigi UC tur gercek isletim-sistemi
+// kontrolunu (dosya/yol varligi, process arama, keyfi bir komutun
+// basari/basarisizligi) SOYUTLAR -- asagidaki aggregation/wiring
+// mantigi, gercek dosya sistemine veya gercek calisan process'lere
+// dokunmadan birim testiyle dogrulanabilsin diye. Varsayilan uygulama
+// (execChecker) gercek os/exec kullanir; testler paket-seviyesi 'sys'
+// degiskenini sahte bir uygulamayla degistirir.
+type systemChecker interface {
+	pathExists(path string) bool
+	pathExecutable(path string) bool
+	processRunning(pattern string) bool
+	commandSucceeds(name string, args ...string) bool
+}
+
+type execChecker struct{}
+
+func (execChecker) pathExists(path string) bool {
+	return exec.Command("test", "-e", path).Run() == nil
+}
+
+func (execChecker) pathExecutable(path string) bool {
+	return exec.Command("test", "-x", path).Run() == nil
+}
+
+func (execChecker) processRunning(pattern string) bool {
+	return exec.Command("pgrep", "-f", pattern).Run() == nil
+}
+
+func (execChecker) commandSucceeds(name string, args ...string) bool {
+	return exec.Command(name, args...).Run() == nil
+}
+
+var sys systemChecker = execChecker{}
+
+// retryUntil, bu paketteki UC yerde (WaitForProcess, Index, LB)
+// tekrarlanan "check() true donene kadar interval araliklarla tekrar
+// dene, en fazla maxWait kadar" deseninin ORTAK halidir -- MERKEZI
+// olarak (kucuk sure degerleriyle, hizlica) test edilir; boylece her
+// cagiran yer kendi 120s/180s/60s sabitiyle GERCEK ZAMAN beklemeden bu
+// mantigin dogrulugundan emin olunabilir.
+func retryUntil(maxWait, interval time.Duration, check func() bool) (ok bool, waited time.Duration) {
+	for waited < maxWait {
+		if check() {
+			return true, waited
+		}
+		time.Sleep(interval)
+		waited += interval
+	}
+	return false, waited
+}
+
 // WaitForProcess, verify_apptier.sh / verify_space.sh icindeki
 // wait_for_process() fonksiyonunun birebir karsiligidir -- TEK FARKLA:
 // pattern bir YOL (/ ile basliyorsa), tam maxWait boyunca pgrep ile
@@ -20,19 +71,16 @@ import (
 // ayirt edilebilsin diye ANINDA, acik bir hata doner -- gercek bir
 // test ortaminda tam 2 dakika bosa beklendigi fark edilince eklendi.
 func WaitForProcess(label, pattern string, maxWait, interval time.Duration) error {
-	if strings.HasPrefix(pattern, "/") {
-		if err := exec.Command("test", "-e", pattern).Run(); err != nil {
-			return fmt.Errorf("  HATA %s -- YOL BULUNAMADI: '%s' bu host'ta yok (env.sh'deki yol hatali olabilir, ya da bu rol bu host'ta kurulu degil)", label, pattern)
-		}
+	if strings.HasPrefix(pattern, "/") && !sys.pathExists(pattern) {
+		return fmt.Errorf("  HATA %s -- YOL BULUNAMADI: '%s' bu host'ta yok (env.sh'deki yol hatali olabilir, ya da bu rol bu host'ta kurulu degil)", label, pattern)
 	}
-	waited := time.Duration(0)
-	for waited < maxWait {
-		if err := exec.Command("pgrep", "-f", pattern).Run(); err == nil {
-			fmt.Printf("  OK   %s (%s icinde ayakta)\n", label, waited)
-			return nil
-		}
-		time.Sleep(interval)
-		waited += interval
+
+	ok, waited := retryUntil(maxWait, interval, func() bool {
+		return sys.processRunning(pattern)
+	})
+	if ok {
+		fmt.Printf("  OK   %s (%s icinde ayakta)\n", label, waited)
+		return nil
 	}
 	return fmt.Errorf("  HATA %s -- yol var ama %s icinde process CALISMIYOR (pattern: %s)", label, maxWait, pattern)
 }
@@ -109,20 +157,18 @@ func Index(cvinitPath string) error {
 	const interval = 5 * time.Second
 	fmt.Println("--- host4 (3DSpaceIndex) servis dogrulama ---")
 
-	if err := exec.Command("test", "-x", cvinitPath).Run(); err != nil {
-		err = fmt.Errorf("  HATA cvinit.sh bulunamadi/calistirilamaz: %s", cvinitPath)
+	if !sys.pathExecutable(cvinitPath) {
+		err := fmt.Errorf("  HATA cvinit.sh bulunamadi/calistirilamaz: %s", cvinitPath)
 		fmt.Println(err)
 		return err
 	}
 
-	waited := time.Duration(0)
-	for waited < maxWait {
-		if err := exec.Command(cvinitPath, "status").Run(); err == nil {
-			fmt.Printf("  OK   3DSpaceIndex (cvinit.sh status, %s icinde)\n", waited)
-			return nil
-		}
-		time.Sleep(interval)
-		waited += interval
+	ok, waited := retryUntil(maxWait, interval, func() bool {
+		return sys.commandSucceeds(cvinitPath, "status")
+	})
+	if ok {
+		fmt.Printf("  OK   3DSpaceIndex (cvinit.sh status, %s icinde)\n", waited)
+		return nil
 	}
 	err := fmt.Errorf("  HATA 3DSpaceIndex -- %s icinde 'cvinit.sh status' basarili olmadi", maxWait)
 	fmt.Println(err)
@@ -153,16 +199,19 @@ func LB(override string) error {
 		fmt.Printf("  (lbservice env.sh'de belirtilmedi, su adaylar deneniyor: %s)\n", strings.Join(candidates, ", "))
 	}
 
-	waited := time.Duration(0)
-	for waited < maxWait {
+	var matched string
+	ok, waited := retryUntil(maxWait, interval, func() bool {
 		for _, svc := range candidates {
 			if serviceActive(svc) {
-				fmt.Printf("  OK   %s aktif (%s icinde)\n", svc, waited)
-				return nil
+				matched = svc
+				return true
 			}
 		}
-		time.Sleep(interval)
-		waited += interval
+		return false
+	})
+	if ok {
+		fmt.Printf("  OK   %s aktif (%s icinde)\n", matched, waited)
+		return nil
 	}
 
 	var err error
@@ -176,6 +225,6 @@ func LB(override string) error {
 }
 
 func serviceActive(name string) bool {
-	return exec.Command("systemctl", "is-active", "--quiet", name).Run() == nil ||
-		exec.Command("service", name, "status").Run() == nil
+	return sys.commandSucceeds("systemctl", "is-active", "--quiet", name) ||
+		sys.commandSucceeds("service", name, "status")
 }

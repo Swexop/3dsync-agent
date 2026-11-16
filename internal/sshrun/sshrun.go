@@ -26,15 +26,45 @@ func (t Target) String() string {
 	return fmt.Sprintf("%s@%s", t.User, t.Host)
 }
 
+// commandRunner, GERCEK dis komut calistirmayi (exec.Command+Run) SOYUTLAR
+// -- Run/RunLive/Copy'nin "argumanlari olustur -> calistir -> ciktiyi
+// topla/hata sarmala" bilesim mantigi, gercek bir ssh/scp binary'sine
+// (ve gercek bir ag baglantisina) ihtiyac duymadan birim testiyle
+// dogrulanabilsin diye. Varsayilan uygulama (execRunner) gercek
+// os/exec kullanir; testler bu paket-seviyesi degiskeni (runner) sahte
+// bir uygulamayla degistirir.
+type commandRunner interface {
+	// run, name komutunu args ile calistirir. extra nil DEGILSE (RunLive
+	// davranisi), komutun CALISIRKEN birlesik stdout+stderr'i ANINDA
+	// extra'ya da yazilir (Run()'da extra nil'dir -- hicbir sey canli
+	// yazilmaz, hepsi sessizce toplanir). Her iki durumda da toplanan
+	// TAM metin ve exit hatasi dondurulur.
+	run(name string, args []string, extra io.Writer) (string, error)
+}
+
+type execRunner struct{}
+
+func (execRunner) run(name string, args []string, extra io.Writer) (string, error) {
+	cmd := exec.Command(name, args...)
+	var out bytes.Buffer
+	if extra != nil {
+		mw := io.MultiWriter(&out, extra)
+		cmd.Stdout = mw
+		cmd.Stderr = mw
+	} else {
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+	}
+	err := cmd.Run()
+	return out.String(), err
+}
+
+var runner commandRunner = execRunner{}
+
 // Run, bash'teki:  ssh $user@$host "remoteCmd"
 // ile birebir aynisidir -- stdout/stderr'i toplar, exit code'u dondurur.
 func Run(t Target, remoteCmd string) (string, error) {
-	cmd := exec.Command("ssh", t.String(), remoteCmd)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	return out.String(), err
+	return runner.run("ssh", []string{t.String(), remoteCmd}, nil)
 }
 
 // RunLive, Run ile AYNI SONUCU dondurur (toplam stdout+stderr metni +
@@ -54,25 +84,16 @@ func Run(t Target, remoteCmd string) (string, error) {
 // service-stop, verify-services, fullindex) tetikleyiciler icin bunu
 // kullaniyor.
 func RunLive(t Target, remoteCmd string) (string, error) {
-	cmd := exec.Command("ssh", t.String(), remoteCmd)
-	var out bytes.Buffer
-	mw := io.MultiWriter(&out, os.Stdout)
-	cmd.Stdout = mw
-	cmd.Stderr = mw
-	err := cmd.Run()
-	return out.String(), err
+	return runner.run("ssh", []string{t.String(), remoteCmd}, os.Stdout)
 }
 
 // Copy, bash'teki:  scp localPath $user@$host:remotePath
 // ile birebir aynisidir.
 func Copy(localPath string, t Target, remotePath string) error {
 	dest := fmt.Sprintf("%s:%s", t.String(), remotePath)
-	cmd := exec.Command("scp", localPath, dest)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("scp %s -> %s basarisiz: %w (cikti: %s)", localPath, dest, err, out.String())
+	out, err := runner.run("scp", []string{localPath, dest}, nil)
+	if err != nil {
+		return fmt.Errorf("scp %s -> %s basarisiz: %w (cikti: %s)", localPath, dest, err, out)
 	}
 	return nil
 }
