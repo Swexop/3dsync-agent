@@ -47,6 +47,8 @@ jobs:
     needs: build-test
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # varsayilan GITHUB_TOKEN salt-okunur gelir -- Release'e dosya eklemek icin yazma izni gerekir
     steps:
       - uses: actions/checkout@v4
         with:
