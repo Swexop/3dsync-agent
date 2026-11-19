@@ -21,11 +21,12 @@
 #                "bu komut tam olarak neyi degistirecek?" sorusuna cevap
 #                vermek icin -- bkz. Faz 4 (urunlestirme yol haritasi).
 #
-# NOT: env.sh ve secrets.sh BU PAKETTE YOK -- musterinin kendi AutoSync/
-# 3DSync kurulumundan (mevcut, degismeyen dosyalar) geliyor. Bu script
-# onlari SADECE host listesini (host0..host9) ve user/mainpath
-# degerlerini OKUMAK icin source eder; hicbir degeri ekrana yazdirmaz,
-# degistirmez, baska bir yere kopyalamaz.
+# NOT: env.sh ve secrets.sh BU PAKETTE (install.sh'in yaninda) YOK --
+# musteriye OZEL olduklari icin "./3dsync-agent init-config" ile
+# config/env.sh sablonundan uretilir (bkz. customers/README.md).
+# Bu script onlari SADECE host listesini (host0..host9) ve
+# user/mainpath degerlerini OKUMAK icin source eder; hicbir degeri
+# ekrana yazdirmaz, degistirmez, baska bir yere kopyalamaz.
 #
 # NE YAPAR:
 #   1. Go kuruluysa binary'yi derler (linux/amd64, stripped); degilse
@@ -88,9 +89,10 @@ if [ -n "$CUSTOMER" ]; then
   LICENSE_FILE="$SCRIPT_DIR_EARLY/customers/$CUSTOMER/license.lic"
   if [ ! -f "$ENV_FILE" ]; then
     echo "HATA: '$ENV_FILE' bulunamadi -- once bu musteri icin env.sh'i olusturun, orn.:" >&2
-    echo "        ./3dsync-agent init-config --template AutoSync/config/env.sh \\" >&2
-    echo "            --answers customers/$CUSTOMER/env.answers --output customers/$CUSTOMER/env.sh --non-interactive" >&2
-    echo "      (bkz. customers/README.md)" >&2
+    echo "        ./3dsync-agent init-config --output customers/$CUSTOMER/env.sh" >&2
+    echo "      (varsayilan --template config/env.sh'dir -- bu repoyla birlikte gelir;" >&2
+    echo "       --answers customers/$CUSTOMER/env.answers ile interaktif olmayan mod da mumkun." >&2
+    echo "       bkz. customers/README.md)" >&2
     exit 1
   fi
 else
