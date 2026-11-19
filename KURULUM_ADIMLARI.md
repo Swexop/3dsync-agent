@@ -56,12 +56,39 @@ mkdir -p customers/<musteri-adi>
 
 Sırayla sorulan değerleri (user, host0..host9, mainpath, exppath, DB
 bilgileri, urlconf1/urlconf2, STORE URL'leri, TomEE yolları — toplam 42
-değer) kendi ortamınıza göre girin. Hazır bir cevap listeniz varsa:
+değer) kendi ortamınıza göre girin.
+
+**ÖNEMLİ — interaktif modda bir soruyu boş geçmek (Enter) "cevapsız
+bıraktım, dosyayı yazma" demektir, "bu alan opsiyonel, boş kalsın"
+DEMEK DEĞİLDİR.** Tek bir alanı bile boş Enter'layarak geçerseniz,
+`init-config` 42 değeri de doldurduktan sonra "şu değişkenler
+doldurulmadı" hatasıyla dosyayı YAZMAZ. Gerçekten kullanılmayan
+alanlarınız varsa (örn. `sqlindex`, `dest2`, `src2`,
+`fcstomeepathremote`, tek sunuculu bir test kurulumunda `host6`),
+interaktif modu bırakıp bir **answers dosyası** kullanın — orada bu
+alanları `KEY=` şeklinde (değer vermeden) bırakmak GEÇERLİDİR ve dosya
+yine de yazılır:
 
 ```bash
+# customers/<musteri-adi>/env.answers icine KEY=VALUE formatinda,
+# her satirda bir degisken yazin (opsiyonel olanlari "KEY=" olarak
+# bos birakabilirsiniz):
+#   user=svc3dsync
+#   host0=10.1.1.10
+#   ...
+#   sqlindex=
+#   dest2=
+#   src2=
+#   fcstomeepathremote=
+
 ./3dsync-agent init-config --output customers/<musteri-adi>/env.sh \
   --answers customers/<musteri-adi>/env.answers --non-interactive
 ```
+
+`user` gibi gerçekten zorunlu alanları asla boş bırakmayın. `host9`
+`validate-config` tarafından zorunlu sayılır — ayrı bir host'unuz yoksa
+başka bir host'un değerini (örn. `host7`) tekrar yazabilirsiniz, aynı
+host birden fazla rolde olabilir.
 
 ## 4. secrets.sh hazırla (elle)
 
