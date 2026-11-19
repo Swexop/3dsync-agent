@@ -127,28 +127,35 @@ func Run(opt Options) error {
 	}
 
 	reader := bufio.NewReader(opt.In)
+	var needInteractive []placeholder
 	var missing []string
 
 	for idx, ph := range pending {
 		val, fromAnswers := answers[ph.varName]
 		if fromAnswers {
 			fmt.Fprintf(opt.Out, "[%d/%d] %-18s <- answers dosyasindan: %s\n", idx+1, len(pending), ph.varName, val)
-		} else {
-			if opt.NonInteractive {
-				missing = append(missing, ph.varName)
-				continue
-			}
-			val = prompt(opt.Out, reader, ph, idx+1, len(pending))
-			if val == "" {
-				missing = append(missing, ph.varName)
-				continue
-			}
+			lines[ph.lineIdx] = renderLine(ph, val)
+			continue
 		}
-		lines[ph.lineIdx] = renderLine(ph, val)
+		if opt.NonInteractive {
+			missing = append(missing, ph.varName)
+			continue
+		}
+		needInteractive = append(needInteractive, ph)
 	}
 
-	if len(missing) > 0 {
-		return fmt.Errorf("su degiskenler doldurulmadi (atlandi/answers'ta yok): %s -- cikis dosyasi yazilmadi", strings.Join(missing, ", "))
+	if opt.NonInteractive {
+		if len(missing) > 0 {
+			return fmt.Errorf("su degiskenler doldurulmadi (atlandi/answers'ta yok): %s -- cikis dosyasi yazilmadi", strings.Join(missing, ", "))
+		}
+	} else if len(needInteractive) > 0 {
+		values, err := runInteractive(opt.Out, reader, needInteractive)
+		if err != nil {
+			return err
+		}
+		for i, ph := range needInteractive {
+			lines[ph.lineIdx] = renderLine(ph, values[i])
+		}
 	}
 
 	result := strings.Join(lines, "\n")
@@ -196,15 +203,144 @@ func isHashOnly(s string) bool {
 	return true
 }
 
-func prompt(out io.Writer, reader *bufio.Reader, ph placeholder, n, total int) string {
-	fmt.Fprintf(out, "\n--- [%d/%d] %s ---\n", n, total, ph.varName)
+// promptAction, promptOne()'un kullanicinin girdisini nasil
+// yorumladigini bildirir (duz bir deger mi, yoksa bir navigasyon/kontrol
+// komutu mu).
+type promptAction int
+
+const (
+	actionAnswer promptAction = iota // val gecerli bir cevap (bos string dahil -- "atla" ile veya mevcut bos degeri Enter'la koruyarak)
+	actionDefer                      // bos Enter, henuz cevaplanmadi -- devre sonunda tekrar sorulacak
+	actionBack                       // "geri" -- onceki soruya don
+	actionAbort                      // "iptal"/"cikis" VEYA girdi tukendi (EOF) -- islemi durdur, dosya yazilmasin
+)
+
+// promptOne, TEK bir yer tutucu icin soru sorar ve kullanicinin
+// girdisini bir promptAction'a cevirir. "geri"/"atla"/"iptal" ozel
+// komutlarini, EOF'u (girdi tukenmesi) ve "bos Enter" (simdilik
+// gec/defer) durumlarini ayirt eder.
+//
+//   - hasPrev=true ise bu soru DAHA ONCE cevaplanmis (deger duzeltme
+//     turu) -- bos Enter'a basmak, mevcut degeri (prevVal, bos string
+//     dahil -- orn. daha once "atla" ile bilerek bos birakilmis olabilir)
+//     DEGISTIRMEDEN korur, "defer" SAYILMAZ.
+func promptOne(out io.Writer, reader *bufio.Reader, ph placeholder, idx, total int, hasPrev bool, prevVal string) (promptAction, string) {
+	fmt.Fprintf(out, "\n--- [%d/%d] %s ---\n", idx+1, total, ph.varName)
 	for _, d := range ph.desc {
 		fmt.Fprintf(out, "  %s\n", d)
 	}
 	fmt.Fprintf(out, "  (ornek sekil: %s)\n", ph.example)
-	fmt.Fprint(out, "Deger (bos birakip Enter: atla/sonra tekrar calistir): ")
-	line, _ := reader.ReadString('\n')
-	return strings.TrimSpace(line)
+	if hasPrev {
+		fmt.Fprintf(out, "  (su anki deger: %q -- degistirmek icin yeni deger yazin, oldugu gibi birakmak icin sadece Enter'a basin)\n", prevVal)
+	}
+	fmt.Fprint(out, "Deger  ['geri': onceki soruya don | 'atla': bu alani BILEREK bos birak | 'iptal': islemi durdur, hicbir sey yazma | bos Enter: simdilik gec, sonda tekrar sorulur]: ")
+
+	line, err := reader.ReadString('\n')
+	trimmed := strings.TrimSpace(line)
+
+	if err != nil && trimmed == "" {
+		// Girdi tukendi (orn. EOF) ve okunan son parca da bossa --
+		// artik soracak kimse yok, "defer" ile sonsuz donguye
+		// girmek yerine ISLEMI DURDUR.
+		return actionAbort, ""
+	}
+
+	switch strings.ToLower(trimmed) {
+	case "geri", "back":
+		return actionBack, ""
+	case "atla":
+		return actionAnswer, ""
+	case "iptal", "cikis", "exit", "quit":
+		return actionAbort, ""
+	case "":
+		if hasPrev {
+			return actionAnswer, prevVal
+		}
+		return actionDefer, ""
+	default:
+		return actionAnswer, trimmed
+	}
+}
+
+// runInteractive, verilen yer tutucularin TUMU icin deger toplar.
+// Tek gecisli DEGIL: kullanici "geri" ile az once cevapladigi bir
+// soruya donup degerini DUZELTEBILIR; bos Enter'layip gectigi sorular
+// ilk tur bittikten sonra tekrar tekrar sorulur (TUMU cevaplanana ya
+// da kullanici "iptal" edene kadar) -- boylece 40+ soruluk bir oturumda
+// tek bir unutulan/yanlis yazilan deger yuzunden butun oturumu BASTAN
+// baslatmak gerekmez.
+func runInteractive(out io.Writer, reader *bufio.Reader, phs []placeholder) ([]string, error) {
+	n := len(phs)
+	values := make([]string, n)
+	answered := make([]bool, n)
+
+	// 1. tur: sirayla sor, "geri" ile duzeltmeye izin ver.
+	idx := 0
+	for idx < n {
+		action, val := promptOne(out, reader, phs[idx], idx, n, answered[idx], values[idx])
+		switch action {
+		case actionBack:
+			if idx == 0 {
+				fmt.Fprintln(out, "Zaten ilk sorudasiniz -- geri gidilecek yer yok.")
+				continue
+			}
+			idx--
+		case actionAbort:
+			return nil, fmt.Errorf("islem iptal edildi (kullanici 'iptal' yazdi veya girdi tukendi) -- cikis dosyasi yazilmadi")
+		case actionDefer:
+			answered[idx] = false
+			idx++
+		default: // actionAnswer
+			values[idx] = val
+			answered[idx] = true
+			idx++
+		}
+	}
+
+	// 2. ve sonraki turlar: SADECE henuz cevaplanmamis (bos gecilmis)
+	// sorulari, hepsi cevaplanana kadar tekrar tekrar sor. Burada da
+	// "geri" bu alt-kumenin icinde calisir.
+	for {
+		var missingIdx []int
+		for i := 0; i < n; i++ {
+			if !answered[i] {
+				missingIdx = append(missingIdx, i)
+			}
+		}
+		if len(missingIdx) == 0 {
+			break
+		}
+
+		fmt.Fprintf(out, "\n--- Henuz doldurulmayan %d deger var, bunlari simdi tamamlayalim ---\n", len(missingIdx))
+		for _, i := range missingIdx {
+			fmt.Fprintf(out, "  - %s\n", phs[i].varName)
+		}
+
+		mi := 0
+		for mi < len(missingIdx) {
+			idx := missingIdx[mi]
+			action, val := promptOne(out, reader, phs[idx], idx, n, answered[idx], values[idx])
+			switch action {
+			case actionBack:
+				if mi == 0 {
+					fmt.Fprintln(out, "Bu eksik-deger turunun ilk sorusundasiniz -- geri gidilecek yer yok.")
+					continue
+				}
+				mi--
+			case actionAbort:
+				return nil, fmt.Errorf("islem iptal edildi (kullanici 'iptal' yazdi veya girdi tukendi) -- cikis dosyasi yazilmadi")
+			case actionDefer:
+				// Hala bos -- bu turda bu soruyu gec, sonraki tura birak.
+				mi++
+			default: // actionAnswer
+				values[idx] = val
+				answered[idx] = true
+				mi++
+			}
+		}
+	}
+
+	return values, nil
 }
 
 func renderLine(ph placeholder, val string) string {

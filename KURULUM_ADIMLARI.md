@@ -58,16 +58,34 @@ Sırayla sorulan değerleri (user, host0..host9, mainpath, exppath, DB
 bilgileri, urlconf1/urlconf2, STORE URL'leri, TomEE yolları — toplam 42
 değer) kendi ortamınıza göre girin.
 
-**ÖNEMLİ — interaktif modda bir soruyu boş geçmek (Enter) "cevapsız
-bıraktım, dosyayı yazma" demektir, "bu alan opsiyonel, boş kalsın"
-DEMEK DEĞİLDİR.** Tek bir alanı bile boş Enter'layarak geçerseniz,
-`init-config` 42 değeri de doldurduktan sonra "şu değişkenler
-doldurulmadı" hatasıyla dosyayı YAZMAZ. Gerçekten kullanılmayan
-alanlarınız varsa (örn. `sqlindex`, `dest2`, `src2`,
-`fcstomeepathremote`, tek sunuculu bir test kurulumunda `host6`),
-interaktif modu bırakıp bir **answers dosyası** kullanın — orada bu
-alanları `KEY=` şeklinde (değer vermeden) bırakmak GEÇERLİDİR ve dosya
-yine de yazılır:
+**Her soruda şu özel komutlar da geçerli** (artık tek bir yanlış/boş
+cevap yüzünden oturumu baştan başlatmanıza gerek yok):
+
+- `geri` — bir önceki soruya döner, o değeri **düzeltmenize** izin
+  verir (yazım hatası yaptıysanız veya fikrinizi değiştirdiyseniz).
+  Düzeltmek istemiyorsanız sadece Enter'a basıp aynı değerle devam
+  edebilirsiniz.
+- `atla` — bu alanı **bilerek** boş bırakır (gerçekten kullanılmayan
+  bir alan, örn. `sqlindex`, `dest2`, `src2`, `fcstomeepathremote`,
+  tek sunuculu bir test kurulumunda `host6`). `atla` yazılan alan
+  "eksik" sayılmaz, dosya normal şekilde yazılır.
+- Sadece **boş Enter** — "şimdilik cevabım yok, bana sonra tekrar
+  sor" demektir. `init-config`, 42 sorunun tamamı bir kez sorulduktan
+  sonra, boş geçilen soruları tek tek TEKRAR sorar — tüm sorular
+  cevaplanana kadar bu devam eder. Yani boş Enter, dosyanın hiç
+  yazılmayacağı anlamına GELMEZ; sadece o anda atlanır, sonunda
+  tekrar karşınıza çıkar.
+- `iptal` (veya `cikis`) — tüm işlemi durdurur, hiçbir şey yazmaz
+  (gerçekten baştan başlamak isterseniz kullanın).
+
+`user` gibi gerçekten zorunlu bir alanı boş bırakmak isterseniz
+`atla` DEĞİL, gerçek bir değer girmeniz gerekir — `atla`, sadece
+env.sh'de gerçekten kullanılmayan değişkenler için güvenlidir.
+
+Çok sayıda kurulumu tekrarlayacaksanız, sorulara her seferinde elle
+cevap vermek yerine bir **answers dosyası** da kullanabilirsiniz —
+orada opsiyonel alanları `KEY=` şeklinde (değer vermeden) bırakmak
+GEÇERLİDİR ve dosya yine de yazılır:
 
 ```bash
 # customers/<musteri-adi>/env.answers icine KEY=VALUE formatinda,

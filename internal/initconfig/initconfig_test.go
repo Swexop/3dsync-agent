@@ -213,6 +213,127 @@ func TestRun_InvalidTemplatePath_Errors(t *testing.T) {
 	}
 }
 
+func TestRun_Interactive_GeriDuzeltir(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := writeTemp(t, dir, "env.sh", sampleTemplate)
+	out := filepath.Join(dir, "out.sh")
+
+	// user icin once "yanlis-deger" yazilir, sonra host0'da "geri" ile
+	// user'a donulup "duzeltilmis" olarak degistirilir, sonra devam
+	// edilip kalan sorular normal cevaplanir.
+	answers := "yanlis-deger\ngeri\nduzeltilmis\n10.0.0.1\nacmedb\n/opt/acme/tomee\n"
+	var stdout bytes.Buffer
+
+	err := Run(Options{
+		TemplatePath: tmpl,
+		OutputPath:   out,
+		In:           strings.NewReader(answers),
+		Out:          &stdout,
+	})
+	if err != nil {
+		t.Fatalf("Run basarisiz: %v\nstdout:\n%s", err, stdout.String())
+	}
+
+	result, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("cikis okunamadi: %v", err)
+	}
+	content := string(result)
+
+	if !strings.Contains(content, "user=duzeltilmis") {
+		t.Errorf("'geri' ile duzeltilen deger cikista yok:\n%s", content)
+	}
+	if strings.Contains(content, "yanlis-deger") {
+		t.Errorf("'geri' ile DUZELTILMESI gereken eski deger hala cikista:\n%s", content)
+	}
+}
+
+func TestRun_Interactive_BosGecilenSoruTekrarSorulur(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := writeTemp(t, dir, "env.sh", sampleTemplate)
+	out := filepath.Join(dir, "out.sh")
+
+	// host0'i bos Enter ile gec (defer), DB_NAME ve tomeepath'i normal
+	// cevapla; sonra "eksikler" turunde host0 tekrar sorulur, bu sefer
+	// cevaplanir.
+	answers := "svc3ds\n\nacmedb\n/opt/acme/tomee\n10.0.0.1\n"
+	var stdout bytes.Buffer
+
+	err := Run(Options{
+		TemplatePath: tmpl,
+		OutputPath:   out,
+		In:           strings.NewReader(answers),
+		Out:          &stdout,
+	})
+	if err != nil {
+		t.Fatalf("Run basarisiz: %v\nstdout:\n%s", err, stdout.String())
+	}
+
+	result, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("cikis okunamadi: %v", err)
+	}
+	content := string(result)
+	if !strings.Contains(content, "host0=10.0.0.1") {
+		t.Errorf("bos gecilip sonra tekrar sorulan deger cikista yok:\n%s", content)
+	}
+	if strings.Contains(content, "CHANGE_ME_") {
+		t.Errorf("hala CHANGE_ME_ iceriyor:\n%s", content)
+	}
+}
+
+func TestRun_Interactive_AtlaBilerekBosBirakir(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := writeTemp(t, dir, "env.sh", sampleTemplate)
+	out := filepath.Join(dir, "out.sh")
+
+	// tomeepath'i "atla" ile BILEREK bos birak -- bu, bos Enter'dan
+	// farkli olarak dosyanin yazilmasini ENGELLEMEMELI.
+	answers := "svc3ds\n10.0.0.1\nacmedb\natla\n"
+	var stdout bytes.Buffer
+
+	err := Run(Options{
+		TemplatePath: tmpl,
+		OutputPath:   out,
+		In:           strings.NewReader(answers),
+		Out:          &stdout,
+	})
+	if err != nil {
+		t.Fatalf("Run basarisiz: %v\nstdout:\n%s", err, stdout.String())
+	}
+
+	result, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("cikis okunamadi: %v", err)
+	}
+	content := string(result)
+	if !strings.Contains(content, "tomeepath=                 # trailing yorum") {
+		t.Errorf("'atla' ile bilerek bos birakilan deger beklenen sekilde yazilmadi:\n%s", content)
+	}
+}
+
+func TestRun_Interactive_IptalDurdurur(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := writeTemp(t, dir, "env.sh", sampleTemplate)
+	out := filepath.Join(dir, "out.sh")
+
+	answers := "svc3ds\niptal\n"
+	var stdout bytes.Buffer
+
+	err := Run(Options{
+		TemplatePath: tmpl,
+		OutputPath:   out,
+		In:           strings.NewReader(answers),
+		Out:          &stdout,
+	})
+	if err == nil {
+		t.Fatal("'iptal' sonrasi hata bekleniyordu")
+	}
+	if _, statErr := os.Stat(out); statErr == nil {
+		t.Fatal("'iptal' sonrasi cikis dosyasi yazilmamali")
+	}
+}
+
 func TestReadAnswers_StripsQuotesAndComments(t *testing.T) {
 	dir := t.TempDir()
 	f := writeTemp(t, dir, "answers.env", `
