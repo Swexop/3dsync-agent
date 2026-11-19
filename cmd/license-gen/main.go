@@ -19,7 +19,7 @@
 //
 //	# Musteri icin lisans uret:
 //	license-gen -privkey 3dsync-license-private.key \
-//	  -customer "TOGG" -expires 2027-11-16 \
+//	  -customer "Musteri Adi" -expires 2027-11-16 \
 //	  [-host-fingerprint <hex>] \
 //	  -out license.lic
 package main
@@ -39,7 +39,7 @@ import (
 func main() {
 	genKeypair := flag.Bool("genkeypair", false, "yeni bir Ed25519 anahtar cifti uret (private key'i -out'a yazar, public key'i hex olarak basar)")
 	privKeyPath := flag.String("privkey", "", "private key dosyasi (hex, -genkeypair ile uretilen)")
-	customer := flag.String("customer", "", "musteri adi (orn. 'TOGG')")
+	customer := flag.String("customer", "", "musteri adi (orn. 'Musteri Adi')")
 	expires := flag.String("expires", "", "lisans bitis tarihi, YYYY-MM-DD formatinda (gun sonu, UTC)")
 	hostFingerprint := flag.String("host-fingerprint", "", "opsiyonel: bu lisansi belirli bir host'a sabitler (internal/license.HostFingerprint() ciktisi). Bos birakilirsa host kontrolu YAPILMAZ.")
 	out := flag.String("out", "license.lic", "cikti dosyasi yolu")

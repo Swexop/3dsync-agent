@@ -149,7 +149,7 @@ yoluna SSH) kullanıyor:
 - `setup/01_prepare_permissions.sh`, `setup/02_deploy.sh` (Öncelik 3 — genel SSH/sudo kurulum glue, koruma değeri düşük)
 - `steps/03_fcs/03_fcs_trigger.sh` (rsync/scp glue, generic)
 - `steps/10_clear_logs_and_start_services.sh` (generic start glue)
-- `steps/07_location/*.sh` (TOGG'da zaten devre dışı, çağrılmıyor)
+- `steps/07_location/*.sh` (bu müşteride zaten devre dışı, çağrılmıyor)
 
 Bunların hepsi, repodaki ~50 script içinde EN AZ "operasyonel know-how"
 taşıyan kısımlardı (bkz. önceki önceliklendirme tablosu) — rakibin kendi

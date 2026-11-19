@@ -157,7 +157,7 @@ func (c Config) Sequence() error {
 		return err
 	}
 
-	// Adim 7 (location): TOGG'da "location" nesnesi olmadigi
+	// Adim 7 (location): bu musteride "location" nesnesi olmadigi
 	// DOGRULANDIGI icin bilerek ATLANIYOR -- kod silinmedi, sadece
 	// cagrilmiyor. Baska bir musteride location nesneleri varsa, bu
 	// adim burada geri eklenmeli.
